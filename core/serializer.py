@@ -17,3 +17,10 @@ class ActionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Action
         fields = "__all__"
+
+
+class CarpoolTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CarpoolTask
+        fields = "__all__"
+

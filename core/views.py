@@ -1,14 +1,52 @@
 import haversine as hs
+from django.db.models import Sum
 
 from rest_framework import status as HTTPStatusCode
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from fastai.vision.all import *
 # Local
 from .enum import *
 from .models import *
 from .serializer import *
 
+garbage_model = load_learner("export.pkl")
+
 co2_in_grams_per_kwh = 371.2
+
+co2_in_kg_per_waste_type = {
+  "plastic": {
+    "emissionperkg": 6.5
+  },
+  "cardboard": {
+    "emissionperkg": 1.75
+  },
+  "paper": {
+    "emissionperkg": 1.5
+  },
+  "glass": {
+    "emissionperkg": 1.85
+  },
+  "aluminum": {
+    "emissionperkg": 12
+  },
+  "steel": {
+    "emissionperkg": 2
+  },
+  "cotton (textiles)": {
+    "emissionperkg": 5
+  },
+  "food waste": {
+    "emissionperkg": 1.5
+  },
+  "organic matter (compost)": {
+    "emissionperkg": 0.3
+  },
+  "e-waste (electronic waste)": {
+    "emissionperkg": 100
+  }
+}
+
 
 co2_in_grams_per_mile ={
   "walk": 5,
@@ -270,9 +308,85 @@ def submit_power_bill_activity(request):
     return Response(serializer_data, status=HTTPStatusCode.HTTP_201_CREATED)
 
 
+@api_view(["POST"])
+def submit_recycling_activity(request):
+    data: dict = request.data
+    uid = data.get("uid")
+    image_link = data.get("image_url")
+    quantity_in_grams = data.get("quantity_in_grams", 1)
+    quantity_in_kg = quantity_in_grams / 1000
+    net_carbon_footprint = 0
+    pred, idx, prob = garbage_model.predict(PILImage.create(urlopen(image_link)))
+    if pred is not None:
+        for key, val in co2_in_kg_per_waste_type.items():
+            if str(pred).lower() in str(key).lower():
+                carbon_footprint = val.get("emissionperkg")
+                net_carbon_footprint = carbon_footprint * quantity_in_kg
+                break
+    Action.objects.create(
+        user=User.objects.get(uid=uid),
+        action_type=ActionType.LOG_RECYCLING.value,
+        action_status=ActionStatus.COMPLETED.value,
+        carbon_footprint=net_carbon_footprint,
+        weight=quantity_in_grams,
+    )
+    return Response({"prediction": pred, "probability": float(prob[0]), "carbon_footprint": net_carbon_footprint,}, status=HTTPStatusCode.HTTP_200_OK)
+
+
 @api_view(["GET"])
 def get_user_activities(request):
     uid = request.GET.get("uid")
     action_instance_list = Action.objects.filter(user__uid=uid).order_by("-id")
     serializer_data = ActionSerializer(action_instance_list, many=True).data
     return Response(serializer_data, status=HTTPStatusCode.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def host_carpool_task(request):
+    data = request.data
+    uid = data.get("uid")
+    source_location = data.get("source_location")
+    destination_location = data.get("destination_location")
+    seats_available = data.get("seats_available")
+    allowed_genders = data.get("allowed_genders")
+    is_wheelchair_accessible = data.get("is_wheelchair_accessible")
+    
+    user_instance = User.objects.get(uid=uid)
+    if CarpoolTask.objects.filter(user__uid=uid, active=True).exists():
+        return Response(
+            {"message": "You are already actively hosting a car-pool"},
+            status=HTTPStatusCode.HTTP_400_BAD_REQUEST,
+        )
+
+    carpool_task_instance = CarpoolTask.objects.create(
+        user=user_instance,
+        active=True,
+        source_location=source_location,
+        destination_location=destination_location,
+        seats_available=seats_available,
+        allowed_genders=allowed_genders,
+        pool_uid_list="",
+        is_wheelchair_accessible=is_wheelchair_accessible,
+    )
+    serializer_data = CarpoolTaskSerializer(carpool_task_instance).data
+    return Response(serializer_data, status=HTTPStatusCode.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+def get_active_carpool_hosting(request):
+    uid = request.GET.get("uid")
+    carpool_task_instance_list = CarpoolTask.objects.filter(user__uid=uid, active=True).last()
+    serializer_data = CarpoolTaskSerializer(carpool_task_instance_list).data
+    return Response(serializer_data, status=HTTPStatusCode.HTTP_200_OK)
+
+
+@api_view(["GET"])
+def get_leaderboard(request):
+    user_total_co2_footprint_dict_list = Action.objects.filter(action_status=ActionStatus.COMPLETED.value).values("user").order_by("user").annotate(total_carbon_footprint=Sum("carbon_footprint"))
+    user_total_co2_footprint_dict_list = list(user_total_co2_footprint_dict_list)
+    uid_list = [user_total_co2_footprint_dict.get("user") for user_total_co2_footprint_dict in user_total_co2_footprint_dict_list]
+    user_instance_list = User.objects.filter(uid__in=uid_list)
+    user_instance_dict = {user_instance.uid: dict(UserSerializer(user_instance).data) for user_instance in user_instance_list}
+    for idx, val in enumerate(user_total_co2_footprint_dict_list):
+        user_total_co2_footprint_dict_list[idx]["user"] = user_instance_dict.get(val.get("user"))
+    return Response(user_total_co2_footprint_dict_list, status=HTTPStatusCode.HTTP_200_OK)

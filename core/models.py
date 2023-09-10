@@ -102,3 +102,44 @@ class Action(AutoTimeStampModel):
         null=True,
         default=None,
     )
+
+
+class CarpoolTask(AutoTimeStampModel):
+    user = models.ForeignKey(
+        User,
+        null=True,
+        default=None,
+        on_delete=models.SET_NULL,
+    )
+    active = models.BooleanField(
+        null=False,
+        default=True
+    )
+    source_location = models.CharField(
+        max_length=128,
+        null=True,
+        default=None,
+    )
+    destination_location = models.CharField(
+        max_length=128,
+        null=True,
+        default=None,
+    )
+    seats_available = models.IntegerField(
+        null=False,
+        default=1
+    )
+    allowed_genders = models.CharField(
+        max_length=64,
+        null=False,
+        default="all",
+    )
+    pool_uid_list = models.CharField(
+        max_length=128,
+        null=True,
+        default=None,
+    )
+    is_wheelchair_accessible = models.BooleanField(
+        null=False,
+        default=False
+    )
